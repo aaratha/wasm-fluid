@@ -30,7 +30,6 @@ jobs:
 
       - name: Copy static files
         run: |
-          mkdir -p dist
           cp index.html dist/
 
       - name: Deploy to GitHub Pages
