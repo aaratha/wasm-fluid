@@ -25,11 +25,9 @@ jobs:
       - name: Install wasm-pack
         run: cargo install wasm-pack
 
-      - name: Build WASM
-        run: wasm-pack build --target web --out-dir ./dist/pkg
-
-      - name: Copy static files
+      - name: Build WASM and copy dist files
         run: |
+          wasm-pack build --target web --out-dir ./dist/pkg
           cp index.html dist/
 
       - name: Deploy to GitHub Pages
