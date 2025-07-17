@@ -91,7 +91,6 @@ pub fn start() -> Result<(), JsValue> {
 
     // Mouse up: stop dragging
     {
-        let window_for_up = window.clone();
         let closure = Closure::wrap(Box::new(move |_event: MouseEvent| unsafe {
             IS_DRAGGING = false;
         }) as Box<dyn FnMut(_)>);
