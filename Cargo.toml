@@ -16,6 +16,7 @@ web-sys = { version = "0.3.77", features = [
     "HtmlElement",
     "Element",
     "WebGl2RenderingContext",
+    "MouseEvent",
     "console"
 ] }
 
