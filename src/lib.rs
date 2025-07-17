@@ -9,6 +9,9 @@ use web_sys::{window, HtmlCanvasElement, MouseEvent, WebGl2RenderingContext};
 // Global mutable state (unsafe but simple for now)
 static mut CIRCLE_X: f32 = 0.0;
 static mut CIRCLE_Y: f32 = 0.0;
+static mut TARGET_X: f32 = 0.0;
+static mut TARGET_Y: f32 = 0.0;
+
 static mut IS_DRAGGING: bool = false;
 static mut GLO_CONTEXT: Option<WebGl2RenderingContext> = None;
 static mut RADIUS: f32 = 50.0;
@@ -76,8 +79,8 @@ pub fn start() -> Result<(), JsValue> {
                 if IS_DRAGGING {
                     web_sys::console::log_1(&"dragging".into());
 
-                    CIRCLE_X = mouse_x;
-                    CIRCLE_Y = mouse_y;
+                    TARGET_X = mouse_x;
+                    TARGET_Y = mouse_y;
                     // In mousemove handler:
                 }
             }
@@ -292,6 +295,10 @@ fn resize_canvas(canvas: &HtmlCanvasElement, window: &web_sys::Window) {
     }
 }
 
+fn lerp(start: f32, end: f32, t: f32) -> f32 {
+    start + t * (end - start)
+}
+
 fn start_render_loop() {
     let window = web_sys::window().unwrap();
 
@@ -302,6 +309,9 @@ fn start_render_loop() {
         let window = window.clone();
         move || {
             unsafe {
+                let t = 0.1;
+                CIRCLE_X = lerp(CIRCLE_X, TARGET_X, t);
+                CIRCLE_Y = lerp(CIRCLE_Y, TARGET_Y, t);
                 draw_circle();
             }
             window
