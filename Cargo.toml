@@ -15,8 +15,15 @@ web-sys = { version = "0.3.77", features = [
     "HtmlCanvasElement",
     "HtmlElement",
     "Element",
+    "DomRect",
     "WebGl2RenderingContext",
     "MouseEvent",
+    "WebGlBuffer",
+    "WebGlVertexArrayObject",
+    "WebGl2RenderingContext",
+    "WebGlUniformLocation",
+    "WebGlProgram",
+    "WebGlShader",
     "console"
 ] }
 
