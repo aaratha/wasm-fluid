@@ -1,4 +1,7 @@
 #![allow(static_mut_refs)]
+use console_error_panic_hook;
+use std::cell::RefCell;
+use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{window, HtmlCanvasElement, MouseEvent, WebGl2RenderingContext};
@@ -12,6 +15,7 @@ static mut RADIUS: f32 = 50.0;
 
 #[wasm_bindgen(start)]
 pub fn start() -> Result<(), JsValue> {
+    console_error_panic_hook::set_once();
     let window = window().unwrap();
     let document = window.document().unwrap();
     let canvas = document.get_element_by_id("canvas").unwrap();
@@ -29,8 +33,6 @@ pub fn start() -> Result<(), JsValue> {
         CIRCLE_Y = height / 2.0;
         GLO_CONTEXT = Some(gl.clone());
     }
-
-    draw_circle();
 
     // Mouse down: check if inside circle
     {
@@ -76,7 +78,6 @@ pub fn start() -> Result<(), JsValue> {
 
                     CIRCLE_X = mouse_x;
                     CIRCLE_Y = mouse_y;
-                    draw_circle();
                     // In mousemove handler:
                 }
             }
@@ -102,14 +103,13 @@ pub fn start() -> Result<(), JsValue> {
 
         let closure = Closure::wrap(Box::new(move |_event: web_sys::Event| {
             resize_canvas(&canvas_for_resize, &window_for_resize);
-            unsafe {
-                draw_circle();
-            }
         }) as Box<dyn FnMut(_)>);
 
         window.add_event_listener_with_callback("resize", closure.as_ref().unchecked_ref())?;
         closure.forget();
     }
+
+    start_render_loop();
 
     Ok(())
 }
@@ -290,4 +290,30 @@ fn resize_canvas(canvas: &HtmlCanvasElement, window: &web_sys::Window) {
         CIRCLE_X = (width_px as f32) / 2.0;
         CIRCLE_Y = (height_px as f32) / 2.0;
     }
+}
+
+fn start_render_loop() {
+    let window = web_sys::window().unwrap();
+
+    let f: Rc<RefCell<Option<Closure<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
+    let g = f.clone();
+
+    let closure = Closure::wrap(Box::new({
+        let window = window.clone();
+        move || {
+            unsafe {
+                draw_circle();
+            }
+            window
+                .request_animation_frame(f.borrow().as_ref().unwrap().as_ref().unchecked_ref())
+                .unwrap();
+        }
+    }) as Box<dyn FnMut()>);
+
+    *g.borrow_mut() = Some(closure);
+
+    // Start animation frame with closure reference
+    window
+        .request_animation_frame(g.borrow().as_ref().unwrap().as_ref().unchecked_ref())
+        .unwrap();
 }
