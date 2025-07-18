@@ -1,10 +1,12 @@
 #![allow(static_mut_refs)]
 use console_error_panic_hook;
+use js_sys::Float32Array;
+use js_sys::Math::random;
 use std::cell::RefCell;
 use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
-use web_sys::{window, HtmlCanvasElement, MouseEvent, WebGl2RenderingContext};
+use web_sys::{window, HtmlCanvasElement, MouseEvent, WebGl2RenderingContext, WebGlShader};
 
 // Global mutable state (unsafe but simple for now)
 static mut CIRCLE_X: f32 = 0.0;
@@ -16,20 +18,43 @@ static mut IS_DRAGGING: bool = false;
 static mut GLO_CONTEXT: Option<WebGl2RenderingContext> = None;
 static mut RADIUS: f32 = 50.0;
 
+const PARTICLE_GRID_SIZE: usize = 64; // 64x64 = 4096 particles
+const PARTICLE_COUNT: usize = PARTICLE_GRID_SIZE * PARTICLE_GRID_SIZE;
+thread_local! {
+    static PARTICLES: RefCell<Vec<Particle>> = RefCell::new(vec![]);
+}
+
+#[derive(Clone, Copy)]
+struct Particle {
+    x: f32,
+    y: f32,
+    vx: f32,
+    vy: f32,
+}
+
 #[wasm_bindgen(start)]
 pub fn start() -> Result<(), JsValue> {
     console_error_panic_hook::set_once();
     let window = window().unwrap();
     let document = window.document().unwrap();
-    let canvas = document.get_element_by_id("canvas").unwrap();
-    let canvas: HtmlCanvasElement = canvas.dyn_into()?;
+    let canvas = document
+        .get_element_by_id("canvas")
+        .unwrap()
+        .dyn_into::<web_sys::HtmlCanvasElement>()
+        .unwrap();
 
     resize_canvas(&canvas, &window);
 
-    let gl: WebGl2RenderingContext = canvas.get_context("webgl2")?.unwrap().dyn_into()?;
+    let gl = canvas
+        .get_context("webgl2")?
+        .unwrap()
+        .dyn_into::<WebGl2RenderingContext>()?;
 
     let width = canvas.width() as f32;
     let height = canvas.height() as f32;
+
+    let particles = generate_particles(width, height);
+    PARTICLES.with(|p| *p.borrow_mut() = particles);
 
     unsafe {
         CIRCLE_X = width / 2.0;
@@ -111,13 +136,13 @@ pub fn start() -> Result<(), JsValue> {
         closure.forget();
     }
 
-    start_render_loop();
+    start_render_loop(&gl);
 
     Ok(())
 }
 
 /// Draw a filled circle using triangle fan
-fn draw_circle() {
+fn _draw_circle() {
     const SEGMENTS: usize = 100;
 
     unsafe {
@@ -168,18 +193,15 @@ fn draw_circle() {
             let vert_shader = compile_shader(
                 gl,
                 WebGl2RenderingContext::VERTEX_SHADER,
-                r#"
-                attribute vec2 position;
+                r#"#version 300 es
+                precision highp float;
+
+                in vec2 position;
                 uniform vec2 u_resolution;
 
                 void main() {
-                    // Convert from pixels to [0, 1]
                     vec2 zeroToOne = position / u_resolution;
-
-                    // Convert from [0,1] to [-1,1]
                     vec2 clipSpace = zeroToOne * 2.0 - 1.0;
-
-                    // Flip Y because WebGL has +Y going up
                     gl_Position = vec4(clipSpace * vec2(1, -1), 0.0, 1.0);
                 }
                 "#,
@@ -189,10 +211,21 @@ fn draw_circle() {
             let frag_shader = compile_shader(
                 gl,
                 WebGl2RenderingContext::FRAGMENT_SHADER,
-                r#"
+                r#"#version 300 es
+
+                precision highp float;
+
+                uniform sampler2D u_particles;
+                out vec4 outColor;
+
                 void main() {
-                    gl_FragColor = vec4(0.0, 0.5, 1.0, 1.0);
+                    ivec2 coord = ivec2(gl_FragCoord.xy);
+                    vec4 particle = texelFetch(u_particles, coord, 0);
+
+                    // Just color by velocity
+                    outColor = vec4(0.5 + particle.z * 0.05, 0.5 + particle.w * 0.05, 1.0, 1.0);
                 }
+
                 "#,
             )
             .unwrap();
@@ -227,12 +260,13 @@ fn draw_circle() {
 fn compile_shader(
     gl: &WebGl2RenderingContext,
     shader_type: u32,
-    src: &str,
-) -> Result<web_sys::WebGlShader, String> {
+    source: &str,
+) -> Result<WebGlShader, String> {
     let shader = gl
         .create_shader(shader_type)
-        .ok_or("Unable to create shader")?;
-    gl.shader_source(&shader, src);
+        .ok_or_else(|| String::from("Unable to create shader object"))?;
+
+    gl.shader_source(&shader, source);
     gl.compile_shader(&shader);
 
     if gl
@@ -244,7 +278,7 @@ fn compile_shader(
     } else {
         Err(gl
             .get_shader_info_log(&shader)
-            .unwrap_or_else(|| "Unknown error compiling shader".into()))
+            .unwrap_or_else(|| String::from("Unknown error")))
     }
 }
 
@@ -294,11 +328,12 @@ fn resize_canvas(canvas: &HtmlCanvasElement, window: &web_sys::Window) {
     }
 }
 
-fn lerp(start: f32, end: f32, t: f32) -> f32 {
+fn _lerp(start: f32, end: f32, t: f32) -> f32 {
     start + t * (end - start)
 }
 
-fn start_render_loop() {
+fn start_render_loop(gl: &WebGl2RenderingContext) {
+    let gl = gl.clone();
     let window = web_sys::window().unwrap();
 
     let f: Rc<RefCell<Option<Closure<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
@@ -307,12 +342,34 @@ fn start_render_loop() {
     let closure = Closure::wrap(Box::new({
         let window = window.clone();
         move || {
-            unsafe {
-                let t = 0.1;
-                CIRCLE_X = lerp(CIRCLE_X, TARGET_X, t);
-                CIRCLE_Y = lerp(CIRCLE_Y, TARGET_Y, t);
-                draw_circle();
-            }
+            let canvas = gl
+                .canvas()
+                .unwrap()
+                .dyn_into::<HtmlCanvasElement>()
+                .unwrap();
+            let width = canvas.width() as f32;
+            let height = canvas.height() as f32;
+
+            // Update particles
+            PARTICLES.with(|particles| {
+                let mut ps = particles.borrow_mut();
+                for p in ps.iter_mut() {
+                    p.x += p.vx;
+                    p.y += p.vy;
+
+                    // Bounce off edges
+                    if p.x <= 0.0 || p.x >= width {
+                        p.vx *= -1.0;
+                    }
+                    if p.y <= 0.0 || p.y >= height {
+                        p.vy *= -1.0;
+                    }
+                }
+            });
+
+            //draw_circle();
+            draw_particles(&gl, width, height);
+
             window
                 .request_animation_frame(f.borrow().as_ref().unwrap().as_ref().unchecked_ref())
                 .unwrap();
@@ -325,4 +382,85 @@ fn start_render_loop() {
     window
         .request_animation_frame(g.borrow().as_ref().unwrap().as_ref().unchecked_ref())
         .unwrap();
+}
+
+fn rand_range(min: f32, max: f32) -> f32 {
+    min + random() as f32 * (max - min)
+}
+
+fn generate_particles(width: f32, height: f32) -> Vec<Particle> {
+    (0..PARTICLE_COUNT)
+        .map(|_| Particle {
+            x: rand_range(0.0, width),
+            y: rand_range(0.0, height),
+            vx: rand_range(-1.0, 1.0),
+            vy: rand_range(-1.0, 1.0),
+        })
+        .collect()
+}
+
+fn draw_particles(gl: &WebGl2RenderingContext, width: f32, height: f32) {
+    let mut data = vec![];
+
+    PARTICLES.with(|particles| {
+        for p in particles.borrow().iter() {
+            data.push(p.x);
+            data.push(p.y);
+        }
+    });
+
+    let vert_array = Float32Array::from(data.as_slice());
+
+    let buffer = gl.create_buffer().unwrap();
+    gl.bind_buffer(WebGl2RenderingContext::ARRAY_BUFFER, Some(&buffer));
+    gl.buffer_data_with_array_buffer_view(
+        WebGl2RenderingContext::ARRAY_BUFFER,
+        &vert_array,
+        WebGl2RenderingContext::DYNAMIC_DRAW,
+    );
+
+    let vert_shader = compile_shader(
+        gl,
+        WebGl2RenderingContext::VERTEX_SHADER,
+        r#"#version 300 es
+        precision mediump float;
+        in vec2 position;
+        uniform vec2 u_resolution;
+
+        void main() {
+            vec2 zeroToOne = position / u_resolution;
+            vec2 clipSpace = zeroToOne * 2.0 - 1.0;
+            gl_Position = vec4(clipSpace * vec2(1, -1), 0.0, 1.0);
+            gl_PointSize = 4.0;
+        }"#,
+    )
+    .unwrap();
+
+    let frag_shader = compile_shader(
+        gl,
+        WebGl2RenderingContext::FRAGMENT_SHADER,
+        r#"#version 300 es
+        precision mediump float;
+        out vec4 outColor;
+
+        void main() {
+            outColor = vec4(0, 0, 1, 1);
+        }"#,
+    )
+    .unwrap();
+
+    let program = link_program(gl, &vert_shader, &frag_shader).unwrap();
+    gl.use_program(Some(&program));
+
+    let pos_attrib = gl.get_attrib_location(&program, "position") as u32;
+    gl.enable_vertex_attrib_array(pos_attrib);
+    gl.vertex_attrib_pointer_with_i32(pos_attrib, 2, WebGl2RenderingContext::FLOAT, false, 0, 0);
+
+    let res_location = gl.get_uniform_location(&program, "u_resolution").unwrap();
+    gl.uniform2f(Some(&res_location), width, height);
+
+    gl.clear_color(0.9, 0.9, 0.9, 1.0);
+    gl.clear(WebGl2RenderingContext::COLOR_BUFFER_BIT);
+
+    gl.draw_arrays(WebGl2RenderingContext::POINTS, 0, (data.len() / 2) as i32);
 }
