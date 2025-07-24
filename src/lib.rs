@@ -20,6 +20,7 @@ static mut RADIUS: f32 = 50.0;
 
 const PARTICLE_GRID_SIZE: usize = 64; // 64x64 = 4096 particles
 const PARTICLE_COUNT: usize = PARTICLE_GRID_SIZE * PARTICLE_GRID_SIZE;
+
 thread_local! {
     static PARTICLES: RefCell<Vec<Particle>> = RefCell::new(vec![]);
 }
@@ -157,7 +158,7 @@ fn _draw_circle() {
             let height = canvas.height() as f32;
 
             gl.viewport(0, 0, width as i32, height as i32);
-            gl.clear_color(1.0, 1.0, 1.0, 1.0);
+            gl.clear_color(0.0, 0.0, 0.0, 1.0);
             gl.clear(WebGl2RenderingContext::COLOR_BUFFER_BIT);
 
             let mut vertices: Vec<f32> = Vec::with_capacity((SEGMENTS + 2) * 2);
@@ -444,7 +445,7 @@ fn draw_particles(gl: &WebGl2RenderingContext, width: f32, height: f32) {
         out vec4 outColor;
 
         void main() {
-            outColor = vec4(0, 0, 1, 1);
+            outColor = vec4(0.31, 0.282, 0.243, 1);
         }"#,
     )
     .unwrap();
@@ -459,7 +460,7 @@ fn draw_particles(gl: &WebGl2RenderingContext, width: f32, height: f32) {
     let res_location = gl.get_uniform_location(&program, "u_resolution").unwrap();
     gl.uniform2f(Some(&res_location), width, height);
 
-    gl.clear_color(0.9, 0.9, 0.9, 1.0);
+    gl.clear_color(0.0, 0.0, 0.0, 1.0);
     gl.clear(WebGl2RenderingContext::COLOR_BUFFER_BIT);
 
     gl.draw_arrays(WebGl2RenderingContext::POINTS, 0, (data.len() / 2) as i32);
